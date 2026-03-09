@@ -1,0 +1,16 @@
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "SAMEORIGIN"
+    X-Content-Type-Options = "nosniff"
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/join.html"
+  [headers.values]
+    Cache-Control = "no-cache, no-store"
