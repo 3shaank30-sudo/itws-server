@@ -852,6 +852,40 @@ body {
 /* This is managed purely via JS sessionState object */
 
 /* ═══════════════════════════════════════
+   REVEAL ANIMATION SYSTEM
+═══════════════════════════════════════ */
+/* Items start hidden — revealed one by one via JS */
+.reveal-item {
+  opacity: 0;
+  transform: translateY(18px);
+  transition: opacity 0.45s ease, transform 0.45s cubic-bezier(0.34,1.2,0.64,1);
+}
+/* When JS adds .revealed class — item becomes visible */
+.reveal-item.revealed {
+  opacity: 1 !important;
+  transform: translateY(0) !important;
+}
+/* Slides that use entrance auto-reveal (slide 1 style) */
+.slide.active .s-eyebrow,
+.slide.active .s-title,
+.slide.active .s-subtitle,
+.slide.active .s-instructor,
+.slide.active .telugu-text {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+/* roadmap, rule, option, ba-panel entrance on slide becoming active */
+.slide.active .roadmap-stop,
+.slide.active .rule-item,
+.slide.active .option-btn,
+.slide.active .ba-panel,
+.slide.active .ba-arrow,
+.slide.active .ba-promise {
+  opacity: 1;
+  transform: translateX(0) translateY(0) !important;
+}
+
+/* ═══════════════════════════════════════
    RESPONSIVE
 ═══════════════════════════════════════ */
 @media (max-width: 1100px) {
@@ -1254,8 +1288,8 @@ function attemptLogin() {
     setTimeout(() => {
       document.getElementById('login-overlay').style.display = 'none';
       document.getElementById('dashboard').classList.add('visible');
-      updateSessionDisplay();
-      startStudentCountSimulation();
+      renderSlideThumbnails();
+      wsConnect(); // Connect to Railway backend — real student counts
     }, 500);
   } else {
     const err = document.getElementById('login-err');
@@ -1449,6 +1483,14 @@ function goToSlide(n) {
   } else {
     deactivatePoll();
   }
+
+  // Broadcast to students via WebSocket (real-time sync)
+  if (typeof wsAuthenticated !== 'undefined' && wsAuthenticated) {
+    wsSend({ type: 'slide_change', slide: n, title: slide.title });
+  }
+
+  // Persist state across reload
+  saveState();
 }
 
 function jumpToTopic(t) {
@@ -1490,20 +1532,30 @@ function handleKeyNav(e) {
 }
 
 function presRevealOrAdvance() {
-  const slide = SLIDES[SESSION_STATE.currentSlide - 1];
-  const revealItems = document.querySelectorAll(`#pres-slide-${SESSION_STATE.currentSlide} .reveal-item`);
+  const n = SESSION_STATE.currentSlide;
+  const slideEl = document.getElementById(`pres-slide-${n}`);
+  if (!slideEl) { presNavigate(1); return; }
+
+  const revealItems = slideEl.querySelectorAll('.reveal-item');
   
   if (SESSION_STATE.revealStep < revealItems.length) {
+    // Reveal next item
     const item = revealItems[SESSION_STATE.revealStep];
     item.classList.add('revealed');
     SESSION_STATE.revealStep++;
-    
-    // Check if vote-now badge
-    const voteBadge = document.querySelector('.vote-now-badge');
-    if (voteBadge && SESSION_STATE.revealStep >= revealItems.length) {
-      voteBadge.classList.add('show');
+
+    // Show vote-now badge when all items revealed on activity slides
+    if (SESSION_STATE.revealStep >= revealItems.length) {
+      const voteBadge = slideEl.querySelector('.vote-now-badge');
+      if (voteBadge) voteBadge.classList.add('show');
+    }
+
+    // Broadcast reveal step to students
+    if (typeof wsAuthenticated !== 'undefined' && wsAuthenticated) {
+      wsSend({ type: 'reveal_step', step: SESSION_STATE.revealStep });
     }
   } else {
+    // All items revealed — next slide
     presNavigate(1);
   }
 }
@@ -1551,6 +1603,13 @@ function renderPresentationSlide(n) {
   setTimeout(() => {
     const slideEl = document.getElementById(`pres-slide-${n}`);
     if (slideEl) {
+      // Auto-reveal first item immediately so slide is never blank
+      const first = slideEl.querySelector('.reveal-item');
+      if (first) {
+        first.classList.add('revealed');
+        SESSION_STATE.revealStep = 1;
+      }
+
       // Image loading for slide 1
       const img = slideEl.querySelector('.slide-1-img');
       if (img) setTimeout(() => img.classList.add('loaded'), 100);
@@ -2306,13 +2365,6 @@ function loadState() {
   } catch(e){}
 }
 
-// Intercept goToSlide to save state
-const _origGoTo = goToSlide;
-function goToSlide(n) {
-  _origGoTo(n);
-  saveState();
-}
-
 // Load on init (before login if needed)
 loadState();
 
@@ -2320,7 +2372,7 @@ loadState();
 // REAL-TIME WEBSOCKET CLIENT
 // Replace WS_URL with your actual Railway URL after deploy
 // ═══════════════════════════════════════════════════════
-const WS_URL = window.ITWS_WS_URL || 'https://itws-server.onrender.com/';
+const WS_URL = window.ITWS_WS_URL || 'wss://itws-server.onrender.com';
 let ws = null;
 let wsReconnectTimer = null;
 let wsReconnectDelay = 2000;
@@ -2487,33 +2539,9 @@ function updateEmojiCounts(counts) {
   ).join('');
 }
 
-// Override navigateSlide to broadcast to students
-const _origNavigateSlide = navigateSlide;
-function navigateSlide(dir) {
-  _origNavigateSlide(dir);
-  const slide = SLIDES[SESSION_STATE.currentSlide - 1];
-  if (wsAuthenticated) {
-    wsSend({
-      type: 'slide_change',
-      slide: SESSION_STATE.currentSlide,
-      title: slide.title,
-    });
-  }
-}
+// navigateSlide WS broadcast merged into original below
 
-// Override goToSlide to broadcast
-const _origGoToSlide = goToSlide;
-function goToSlide(n) {
-  _origGoToSlide(n);
-  const slide = SLIDES[n - 1];
-  if (wsAuthenticated) {
-    wsSend({
-      type: 'slide_change',
-      slide: n,
-      title: slide.title,
-    });
-  }
-}
+// goToSlide WS broadcast merged into original below
 
 // Open/close poll
 function openActivePoll() {
@@ -2558,31 +2586,7 @@ function regenerateSession() {
 function simulateVotes() { /* removed — use real student votes */ }
 function startStudentCountSimulation() { /* removed — real counts only */ }
 
-// Start WS after login
-const _origAttemptLogin = attemptLogin;
-function attemptLogin() {
-  const pin = ['p1','p2','p3','p4'].map(id => document.getElementById(id).value).join('');
-  if (pin === SESSION_STATE.pin) {
-    SESSION_STATE.authenticated = true;
-    document.getElementById('login-overlay').style.cssText = 'opacity:0;pointer-events:none;transition:opacity 0.5s ease;';
-    setTimeout(() => {
-      document.getElementById('login-overlay').style.display = 'none';
-      document.getElementById('dashboard').classList.add('visible');
-      renderSlideThumbnails();
-      wsConnect(); // REAL connection — no fake data
-    }, 500);
-  } else {
-    const err = document.getElementById('login-err');
-    err.textContent = '❌ Incorrect PIN. Try again.';
-    ['p1','p2','p3','p4'].forEach(id => {
-      document.getElementById(id).value = '';
-      document.getElementById(id).style.borderColor = 'var(--red)';
-      setTimeout(() => document.getElementById(id).style.borderColor = '', 1500);
-    });
-    document.getElementById('p1').focus();
-    setTimeout(() => err.textContent = '', 3000);
-  }
-}
+// attemptLogin WS start merged into original
 
 // Keepalive ping
 setInterval(() => {
