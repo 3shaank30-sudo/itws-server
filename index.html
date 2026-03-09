@@ -2320,7 +2320,7 @@ loadState();
 // REAL-TIME WEBSOCKET CLIENT
 // Replace WS_URL with your actual Railway URL after deploy
 // ═══════════════════════════════════════════════════════
-const WS_URL = window.ITWS_WS_URL || 'wss://YOUR-RAILWAY-URL.railway.app';
+const WS_URL = window.ITWS_WS_URL || 'https://itws-server.onrender.com/';
 let ws = null;
 let wsReconnectTimer = null;
 let wsReconnectDelay = 2000;
